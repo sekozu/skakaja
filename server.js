@@ -1,4 +1,7 @@
 import express from 'express';
+import path from 'path';
+const app = express();
+
 import * as arnime from './api/arnime/index.js';
 
 const app = express();
@@ -28,9 +31,7 @@ app.get('/api/watch/:id', async (req, res) => {
 });
 
 // Root API (Dokumentasi)
-const express = require('express');
-const path = require('path');
-const app = express();
+
 
 app.use(express.static(path.join(__dirname, 'public')));
 
