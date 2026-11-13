@@ -214,3 +214,70 @@ export async function getKategori(query = {}) {
     return { status: false, message: err.message };
   }
 }
+
+// ==========================================
+// 5. GET IFRAME & STREAM MP4
+// ==========================================
+export async function getVideoPlayer(id) {
+  try {
+    // 1. Buka halaman watch
+    const url = `${BASE_URL}/watch/${id}`;
+    const { data: html } = await axios.get(url, { headers: HEADERS });
+    const $ = cheerio.load(html);
+
+    // 2. Ambil URL iframe
+    const iframeUrl = $('iframe').first().attr('src');
+    if (!iframeUrl) {
+      return { status: false, message: 'Iframe tidak ditemukan di halaman watch' };
+    }
+
+    // 3. Buka URL iframe (dengan Referer biar nggak 403)
+    let iframeHtml = '';
+    try {
+      const iframeRes = await axios.get(iframeUrl, {
+        headers: {
+          ...HEADERS,
+          'Referer': url, // WAJIB! biar server iframe ngizinin
+        }
+      });
+      iframeHtml = iframeRes.data;
+    } catch (err) {
+      return { status: false, message: `Gagal buka iframe: ${err.message}`, iframeUrl };
+    }
+
+    // 4. Cari link .mp4 di dalam iframe (regex)
+    // Link biasanya ada di dalam script, formatnya https://storage-v2.../stream/ID?q=720p
+    const regex = /https:\\?\/\\?\/[^"\\]+\.mp4[^"\\]*/g;
+    const matches = iframeHtml.match(regex) || [];
+
+    // Bersihin escape (\/ jadi /) dan buang duplikat
+    const streams = [...new Set(matches.map(m => m.replace(/\\/g, '')))];
+
+    if (streams.length === 0) {
+      return { 
+        status: false, 
+        message: 'Link MP4 tidak ditemukan di iframe', 
+        iframeUrl 
+      };
+    }
+
+    // Kelompokkan berdasarkan resolusi (q=1080p, 720p, dll)
+    const result = streams.map(link => {
+      const quality = link.match(/q=(\d+p)/)?.[1] || 
+                      link.match(/(\d+p)/)?.[1] || 
+                      'unknown';
+      return { quality, url: link };
+    });
+
+    return {
+      status: true,
+      data: {
+        id: String(id),
+        iframeUrl,
+        streams: result
+      }
+    };
+  } catch (err) {
+    return { status: false, message: err.message };
+  }
+}

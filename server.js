@@ -23,6 +23,9 @@ app.get('/api/kategori', async (req, res) => {
 app.get('/api/popular', async (req, res) => {
   res.json(await arnime.getPopuler());
 });
+app.get('/api/watch/:id', async (req, res) => {
+  res.json(await arnime.getVideoPlayer(req.params.id));
+});
 
 // Root API (Dokumentasi)
 app.get('/api', (req, res) => {
