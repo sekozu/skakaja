@@ -1,0 +1,48 @@
+import express from 'express';
+import * as arnime from './api/arnime/index.js';
+
+const app = express();
+const PORT = 1111;
+
+// ==========================================
+// 🌐 ENDPOINT API
+// ==========================================
+
+app.get('/api/latest', async (req, res) => {
+  const data = await arnime.getLatest();
+  res.json(data);
+});
+app.get('/api/anime/:id', async (req, res) => {
+  const data = await arnime.getAnimeDetail(req.params.id);
+  res.json(data);
+});
+app.get('/api/kategori', async (req, res) => {
+  const data = await arnime.getKategori(req.query);
+  res.json(data);
+});
+app.get('/api/popular', async (req, res) => {
+  res.json(await arnime.getPopuler());
+});
+
+// Root API (Dokumentasi)
+app.get('/api', (req, res) => {
+  res.json({ 
+    status: 'success',
+    author: 'Hamm',
+    endpoints: {
+      latest: '/api/latest',
+      animeDetail: '/api/anime/:id',
+      kategori: '/api/kategori/:kategori'
+    }
+  });
+});
+
+// ==========================================
+// 🚀 JALANKAN SERVER
+// ==========================================
+app.listen(PORT, () => {
+  console.log(`\n✦ Server jalan di http://localhost:${PORT}`);
+  console.log(`✦ Tes Home: http://localhost:${PORT}/api/home`);
+  console.log(`✦ Tes Detail: http://localhost:${PORT}/api/anime/426`);
+  console.log(`✦ Tes Kategori: http://localhost:${PORT}/api/kategori?genre=Romance&status=ongoing&sort=update\n`);
+});
