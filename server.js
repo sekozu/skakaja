@@ -28,16 +28,14 @@ app.get('/api/watch/:id', async (req, res) => {
 });
 
 // Root API (Dokumentasi)
+const express = require('express');
+const path = require('path');
+const app = express();
+
+app.use(express.static(path.join(__dirname, 'public')));
+
 app.get('/api', (req, res) => {
-  res.json({ 
-    status: 'success',
-    author: 'Hamm',
-    endpoints: {
-      latest: '/api/latest',
-      animeDetail: '/api/anime/:id',
-      kategori: '/api/kategori/:kategori'
-    }
-  });
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ==========================================
