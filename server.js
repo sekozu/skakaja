@@ -2,7 +2,7 @@ import express from 'express';
 import * as arnime from './api/arnime/index.js';
 
 const app = express();
-const PORT = 1111;
+const PORT = process.env.PORT || 1111;
 
 // ==========================================
 // 🌐 ENDPOINT API
@@ -40,9 +40,13 @@ app.get('/api', (req, res) => {
 // ==========================================
 // 🚀 JALANKAN SERVER
 // ==========================================
-app.listen(PORT, () => {
-  console.log(`\n✦ Server jalan di http://localhost:${PORT}`);
-  console.log(`✦ Tes Home: http://localhost:${PORT}/api/home`);
-  console.log(`✦ Tes Detail: http://localhost:${PORT}/api/anime/426`);
-  console.log(`✦ Tes Kategori: http://localhost:${PORT}/api/kategori?genre=Romance&status=ongoing&sort=update\n`);
-});
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`\n✦ Server jalan di http://localhost:${PORT}`);
+    console.log(`✦ Tes Home: http://localhost:${PORT}/api/home`);
+    console.log(`✦ Tes Detail: http://localhost:${PORT}/api/anime/426`);
+    console.log(`✦ Tes Kategori: http://localhost:${PORT}/api/kategori?genre=Romance&status=ongoing&sort=update\n`);
+  });
+}
+
+export default app;
