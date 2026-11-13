@@ -223,6 +223,11 @@ export async function getVideoPlayer(id) {
     const url = `${BASE_URL}/watch/${id}`;
     const { data: html } = await axios.get(url, { headers: HEADERS });
 
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    const title = titleMatch 
+      ? titleMatch[1].replace(/^Nonton\s+/i, '').replace(/\s+Sub Indo\s*\|.*$/i, '').trim() 
+      : 'Unknown Title';
+
     const regex = /https:\\?\/\\?\/storage-v2\.arnime\.my\.id\\?\/storage\\?\/stream\\?\/[^"\\]+/g;
     const matches = html.match(regex) || [];
     const streams = [...new Set(matches.map(m => m.replace(/\\/g, '')))];
@@ -236,7 +241,14 @@ export async function getVideoPlayer(id) {
       return { quality, url: link };
     });
 
-    return { status: true, data: { id: String(id), streams: result } };
+    return { 
+      status: true, 
+      data: { 
+        id: String(id), 
+        title: title,
+        streams: result 
+      } 
+    };
   } catch (err) {
     return { status: false, message: err.message };
   }
