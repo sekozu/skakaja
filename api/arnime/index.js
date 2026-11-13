@@ -224,9 +224,24 @@ export async function getVideoPlayer(id) {
     const { data: html } = await axios.get(url, { headers: HEADERS });
 
     const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-    const title = titleMatch 
-      ? titleMatch[1].replace(/^Nonton\s+/i, '').replace(/\s+Sub Indo\s*\|.*$/i, '').trim() 
-      : 'Unknown Title';
+    let rawTitle = titleMatch ? titleMatch[1] : '';
+    
+    rawTitle = rawTitle
+      .replace(/^Nonton\s+/i, '')
+      .replace(/\s+Sub Indo\s*\|.*$/i, '')
+      .replace(/\s+Sub\s+Indo/gi, '')
+      .replace(/\s*\|.*$/, '')
+      .trim();
+    
+    const episodeMatch = rawTitle.match(/(.*)\s+(Episode\s+\d+.*)$/i);
+    
+    let title = rawTitle;
+    let episode = '';
+    
+    if (episodeMatch) {
+      title = episodeMatch[1].trim();
+      episode = episodeMatch[2].trim();
+    }
 
     const regex = /https:\\?\/\\?\/storage-v2\.arnime\.my\.id\\?\/storage\\?\/stream\\?\/[^"\\]+/g;
     const matches = html.match(regex) || [];
@@ -246,6 +261,7 @@ export async function getVideoPlayer(id) {
       data: { 
         id: String(id), 
         title: title,
+        episode: episode,
         streams: result 
       } 
     };
