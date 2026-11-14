@@ -5,267 +5,160 @@ const BASE_URL = 'https://arnime.my.id';
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+  'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
 };
 
-// ==========================================
-// 🕹 HELPER
-// ==========================================
-
-function extractRsc(html) {
-  const chunks = html.split('self.__next_f.push([1,');
-  let fullRsc = '';
-  for (let i = 1; i < chunks.length; i++) {
-    let c = chunks[i];
-    const end = c.lastIndexOf('])');
-    if (end !== -1) c = c.slice(0, end);
-    try {
-      const parsed = JSON.parse(c);
-      if (typeof parsed === 'string') fullRsc += parsed;
-    } catch (_) {}
+// 🌐 Fetch + error handling (1 tempat)
+async function get(path) {
+  try {
+    const res = await axios.get(BASE_URL + path, { headers: HEADERS, validateStatus: () => true });
+    return res.status === 200 ? { ok: true, html: res.data } : { ok: false, code: res.status, message: 'not found' };
+  } catch (e) {
+    return { ok: false, code: e.response?.status || 500, message: e.message };
   }
-  return fullRsc;
 }
 
-function parseAnimeCard($, el) {
-  const $el = $(el);
-  const link = $el.closest('a').attr('href') || $el.find('a').attr('href');
-  if (!link || !link.includes('/anime/')) return null;
+// 🧰 Helper
+const rsc = (html) => html.split('self.__next_f.push([1,').slice(1).map(c => {
+  const end = c.lastIndexOf('])');
+  try { return JSON.parse(end !== -1 ? c.slice(0, end) : c); } catch { return ''; }
+}).join('');
 
-  const id = link.match(/\/anime\/(\d+)/)?.[1];
-  const title = $el.find('.line-clamp-2').first().text().trim();
-  const image = $el.find('img').first().attr('src');
-  const badge = $el.find('.uppercase.tracking-wider').first().text().trim();
-  const rating = $el.find('.text-amber-400').first().text().replace('★', '').trim();
-  const jadwal = $el.find('.truncate').last().text().trim();
+const list = ($) => {
+  const out = [], seen = new Set();
+  $('.perf-card').each((_, el) => {
+    const $el = $(el), link = $el.find('a').attr('href');
+    if (!link?.includes('/anime/')) return;
+    const id = link.match(/\/anime\/(\d+)/)?.[1], title = $el.find('.line-clamp-2').first().text().trim();
+    if (!id || !title || seen.has(id)) return;
+    seen.add(id);
+    out.push({
+      id, title, url: `${BASE_URL}/anime/${id}`,
+      image: $el.find('img').first().attr('src'),
+      badge: $el.find('.uppercase.tracking-wider').first().text().trim(),
+      rating: $el.find('.text-amber-400').first().text().replace('★', '').trim() || null,
+      jadwal: $el.find('.truncate').last().text().trim() || null,
+    });
+  });
+  return out;
+};
 
-  if (!id || !title) return null;
+const filters = ($) => {
+  const f = { type: [], genre: [], status: [], sort: [] };
+  const map = { tipe: 'type', genre: 'genre', status: 'status', urutkan: 'sort' };
+  $('div.flex.items-start.gap-2').each((_, el) => {
+    const $el = $(el), key = map[$el.find('span').first().text().trim().toLowerCase()];
+    if (!key) return;
+    $el.find('a').each((_, a) => {
+      const name = $(a).text().trim(), href = $(a).attr('href');
+      if (name !== 'Semua' && href) f[key].push({ name, url: href });
+    });
+  });
+  return f;
+};
+
+// 🚀 Endpoint
+export async function getLatest() {
+  const r = await get('/terbaru');
+  if (!r.ok) return { status: false, ...r };
+  const data = list(cheerio.load(r.html));
+  return { status: true, total: data.length, data };
+}
+
+export async function getPopuler() {
+  const r = await get('/populer');
+  if (!r.ok) return { status: false, ...r };
+  const data = list(cheerio.load(r.html));
+  return { status: true, total: data.length, data };
+}
+
+export async function getKategori(query = {}) {
+  const p = new URLSearchParams(Object.entries(query).filter(([k, v]) => v && ['type', 'genre', 'status', 'sort', 'page'].includes(k)));
+  const r = await get('/kategori' + (p.toString() ? '?' + p : ''));
+  if (!r.ok) return { status: false, ...r };
+  const $ = cheerio.load(r.html), data = list($);
+  return { status: true, total: data.length, filters: filters($), data };
+}
+
+export async function getSearch(q) {
+  if (!q) return { status: false, code: 400, message: 'query "q" wajib diisi' };
+  const r = await get('/search?q=' + encodeURIComponent(q));
+  if (!r.ok) return { status: false, ...r };
+  const data = list(cheerio.load(r.html));
+  return { status: true, query: q, total: data.length, data };
+}
+
+export async function getAnimeDetail(id) {
+  const tid = parseInt(id, 10);
+  if (!Number.isFinite(tid) || tid < 1) return { status: false, code: 400, message: 'invalid id' };
+
+  const r = await get(`/anime/${tid}`);
+  if (!r.ok) return { status: false, ...r };
+
+  const $ = cheerio.load(r.html), x = rsc(r.html);
+  const kw = $('meta[name="keywords"]').attr('content') || '';
+  const title = kw.split(',')[0].trim() || $('h1').first().text().trim();
+
+  const para = x.split('"paragraphs":[')[1];
+  let synopsis = para ? para.split(']')[0].split(/","/)[0].replace(/^"|"$/g, '').replace(/\\"/g, '"') : ($('meta[name="description"]').attr('content') || '');
+  synopsis = synopsis.replace(/\\+"/g, '"').replace(/\s+/g, ' ').trim();
+  if (!synopsis || /^Nonton anime subtitle Indonesia terlengkap/i.test(synopsis)) return { status: false, code: 404, message: 'not found' };
+
+  const episodes = [], seenEp = new Set();
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const items = [].concat(JSON.parse($(el).html()));
+      items.forEach(i => (i.itemListElement || []).forEach(ep => {
+        const n = ep.name?.match(/\d+/)?.[0];
+        if (ep.url && n && !seenEp.has(n)) { seenEp.add(n); episodes.push({ episode: n, url: ep.url }); }
+      }));
+    } catch {}
+  });
+  episodes.sort((a, b) => a.episode - b.episode);
+
+  const relMatch = x.match(/"animeList":\s*(\[[\s\S]*?\])(?=,\s*"id":"related-anime")/);
+  let relatedAnime = [];
+  if (relMatch) try {
+    relatedAnime = JSON.parse(relMatch[1]).filter(i => String(i.animeId || i.id) !== String(tid)).map(i => ({
+      id: String(i.animeId || i.id), title: i.title, image: i.poster,
+      rating: i.rating || null, badge: i.status || 'UNKNOWN', jadwal: i.releaseDay || 'Random',
+    }));
+  } catch {}
+
   return {
-    id,
-    title,
-    url: `${BASE_URL}/anime/${id}`,
-    image,
-    badge,
-    rating: rating || null,
-    jadwal: jadwal || null
+    status: true, id: String(tid), req_id: String(id),
+    data: {
+      title,
+      alternatif: $('span').filter((_, el) => $(el).text().trim() === 'Alternatif:').next('span').text().trim(),
+      synopsis,
+      image: $('img.object-cover').first().attr('src'),
+      rating: $('.lucide-star').first().parent().text().replace('★', '').trim(),
+      badge: $('.bg-emerald-600\\/80, .bg-red-600\\/80').first().text().replace(/[^A-Z]/g, '').trim() || 'UNKNOWN',
+      genres: [...new Set($('a[href*="/kategori?genre="]').map((_, e) => $(e).text().trim()).get().filter(Boolean))],
+      totalEpisode: episodes.length, episodes, relatedAnime,
+    },
   };
 }
 
-// ==========================================
-// 1. LATEST
-// ==========================================
-export async function getLatest() {
-  try {
-    const { data } = await axios.get(`${BASE_URL}/terbaru`, { headers: HEADERS });
-    const $ = cheerio.load(data);
-    const animeList = [];
+export async function getVideoPlayer(id, ep = 1) {
+  const sid = parseInt(id, 10);
+  if (!Number.isFinite(sid) || sid < 1) return { status: false, code: 400, message: 'invalid id' };
 
-    $('.perf-card').each((_, el) => {
-      const card = parseAnimeCard($, el);
-      if (card && !animeList.some(a => a.id === card.id)) animeList.push(card);
-    });
+  const r = await get(`/watch/${sid}?ep=${parseInt(ep, 10) || 1}`);
+  if (!r.ok) return { status: false, ...r };
 
-    return { status: true, total: animeList.length, data: animeList };
-  } catch (err) {
-    return { status: false, message: err.message };
-  }
-}
+  const x = rsc(r.html);
+  const title = x.match(/"animeTitle":"([^"]+)"/)?.[1];
+  const epTitle = x.match(/"episodeTitle":"([^"]+)"/)?.[1];
+  const epId = x.match(/"episodeId":"(\d+)"/)?.[1];
+  const epNum = x.match(/"episodeNumber":(\d+)/)?.[1];
+  if (!title || !epId || !epNum) return { status: false, code: 404, message: 'not found' };
 
-// ==========================================
-// 2. POPULER
-// ==========================================
+  const streams = [...new Set((r.html.match(/https:\\?\/\\?\/storage-v2\.arnime\.my\.id\\?\/storage\\?\/stream\\?\/[^"\\]+/g) || []).map(m => m.replace(/\\/g, '')))];
+  if (!streams.length) return { status: false, code: 404, message: 'not found' };
 
-export async function getPopuler() {
-  try {
-    const { data } = await axios.get(`${BASE_URL}/populer`, { headers: HEADERS });
-    const $ = cheerio.load(data);
-    const animeList = [];
-
-    $('.perf-card').each((_, el) => {
-      const card = parseAnimeCard($, el);
-      if (card && !animeList.some(a => a.id === card.id)) animeList.push(card);
-    });
-
-    return { status: true, total: animeList.length, data: animeList };
-  } catch (err) {
-    return { status: false, message: err.message };
-  }
-}
-
-// ==========================================
-// 3. DETAIL & EPISODE
-// ==========================================
-export async function getAnimeDetail(id) {
-  try {
-    const { data: html } = await axios.get(`${BASE_URL}/anime/${id}`, { headers: HEADERS });
-    const $ = cheerio.load(html);
-    const rsc = extractRsc(html);
-
-    const title = $('h1').first().text().trim();
-    const image = $('img.object-cover').first().attr('src');
-    const rating = $('.lucide-star').first().parent().text().replace('★', '').trim();
-    const badge = $('.bg-emerald-600\\/80, .bg-red-600\\/80').first().text().replace(/[^A-Z]/g, '').trim() || 'UNKNOWN';
-    
-    const alternatif = $('span').filter((_, el) => $(el).text().trim() === 'Alternatif:').next('span').text().trim();
-
-    const paraSplit = rsc.split('"paragraphs":[');
-    let synopsis = paraSplit.length > 1 
-      ? paraSplit[1].split(']')[0].split(/","/)[0].replace(/^"|"$/g, '').replace(/\\"/g, '"')
-      : $('meta[name="description"]').attr('content') || '';
-
-    const genres = [];
-    $('a[href*="/kategori?genre="]').each((_, el) => {
-      const g = $(el).text().trim();
-      if (g && !genres.includes(g)) genres.push(g);
-    });
-
-    const episodes = [];
-    $('script[type="application/ld+json"]').each((_, el) => {
-      try {
-        const jsonData = JSON.parse($(el).html());
-        (Array.isArray(jsonData) ? jsonData : [jsonData]).forEach(item => {
-          if (item['@type'] === 'ItemList' && item.itemListElement) {
-            item.itemListElement.forEach(ep => {
-              const epNum = ep.name.match(/\d+/)?.[0];
-              if (ep.url && epNum && !episodes.some(e => e.episode === epNum)) {
-                episodes.push({ episode: epNum, url: ep.url });
-              }
-            });
-          }
-        });
-      } catch (e) {}
-    });
-    episodes.sort((a, b) => parseInt(a.episode) - parseInt(b.episode));
-
-    let relatedAnime = [];
-    const relatedMatch = rsc.match(/"animeList":\s*(\[[\s\S]*?\])(?=,\s*"id":"related-anime")/);
-    if (relatedMatch) {
-      try {
-        relatedAnime = JSON.parse(relatedMatch[1])
-          .filter(item => String(item.animeId || item.id) !== String(id))
-          .map(item => ({
-            id: String(item.animeId || item.id),
-            title: item.title,
-            image: item.poster,
-            rating: item.rating || null,
-            badge: item.status || 'UNKNOWN',
-            jadwal: item.releaseDay || 'Random'
-          }));
-      } catch (e) {}
-    }
-
-    return {
-      status: true,
-      data: {
-        id: String(id),
-        title,
-        alternatif,
-        synopsis: synopsis.replace(/\\+"/g, '"').replace(/\s+/g, ' ').trim(),
-        image,
-        rating,
-        badge,
-        genres,
-        totalEpisode: episodes.length,
-        episodes,
-        relatedAnime
-      }
-    };
-  } catch (err) {
-    return { status: false, message: err.message };
-  }
-}
-
-// ==========================================
-// 4. KATEGORI (FILTER & LIST)
-// ==========================================
-export async function getKategori(query = {}) {
-  try {
-    const params = new URLSearchParams();
-    ['type', 'genre', 'status', 'sort', 'page'].forEach(k => query[k] && params.append(k, query[k]));
-    const url = `${BASE_URL}/kategori${params.toString() ? '?' + params.toString() : ''}`;
-    
-    const { data } = await axios.get(url, { headers: HEADERS });
-    const $ = cheerio.load(data);
-
-    const animeList = [];
-    $('.perf-card').each((_, el) => {
-      const card = parseAnimeCard($, el);
-      if (card && !animeList.some(a => a.id === card.id)) animeList.push(card);
-    });
-
-    const filters = { type: [], genre: [], status: [], sort: [] };
-    $('div.flex.items-start.gap-2').each((_, el) => {
-      const $el = $(el);
-      const label = $el.find('span').first().text().trim().toLowerCase();
-      const items = [];
-      $el.find('a').each((_, a) => {
-        if ($(a).text().trim() !== 'Semua' && $(a).attr('href')) {
-          items.push({ name: $(a).text().trim(), url: $(a).attr('href') });
-        }
-      });
-      if (label === 'tipe') filters.type = items;
-      if (label === 'genre') filters.genre = items;
-      if (label === 'status') filters.status = items;
-      if (label === 'urutkan') filters.sort = items;
-    });
-
-    return { status: true, total: animeList.length, filters, data: animeList };
-  } catch (err) {
-    return { status: false, message: err.message };
-  }
-}
-
-// ==========================================
-// 5. GET IFRAME & STREAM MP4
-// ==========================================
-export async function getVideoPlayer(id) {
-  try {
-    const url = `${BASE_URL}/watch/${id}`;
-    const { data: html } = await axios.get(url, { headers: HEADERS });
-
-    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-    let rawTitle = titleMatch ? titleMatch[1] : '';
-    
-    rawTitle = rawTitle
-      .replace(/^Nonton\s+/i, '')
-      .replace(/\s+Sub Indo\s*\|.*$/i, '')
-      .replace(/\s+Sub\s+Indo/gi, '')
-      .replace(/\s*\|.*$/, '')
-      .trim();
-    
-    const episodeMatch = rawTitle.match(/(.*)\s+(Episode\s+\d+.*)$/i);
-    
-    let title = rawTitle;
-    let episode = '';
-    
-    if (episodeMatch) {
-      title = episodeMatch[1].trim();
-      episode = episodeMatch[2].trim();
-    }
-
-    const regex = /https:\\?\/\\?\/storage-v2\.arnime\.my\.id\\?\/storage\\?\/stream\\?\/[^"\\]+/g;
-    const matches = html.match(regex) || [];
-    const streams = [...new Set(matches.map(m => m.replace(/\\/g, '')))];
-
-    if (streams.length === 0) {
-      return { status: false, message: 'Link video tidak ditemukan' };
-    }
-
-    const result = streams.map(link => {
-      const quality = link.match(/q=(\d+p)/)?.[1] || 'unknown';
-      return { quality, url: link };
-    });
-
-    return { 
-      status: true, 
-      data: { 
-        id: String(id), 
-        title: title,
-        episode: episode,
-        streams: result 
-      } 
-    };
-  } catch (err) {
-    return { status: false, message: err.message };
-  }
+  return {
+    status: true, id: String(sid), epId, epNumber: parseInt(epNum, 10), title, epTitle,
+    data: streams.map(url => ({ quality: url.match(/q=(\d+p)/)?.[1] || 'unknown', url })),
+  };
 }
