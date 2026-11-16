@@ -151,16 +151,12 @@ export async function getVideoPlayer(id, ep = 1) {
   const r = await get(`/watch/${sid}?ep=${epNumToFetch}`);
   if (!r.ok) return { status: false, ...r };
   const x = rsc(r.html);
-  const animeTitle = x.match(/"animeTitle":"([^"]+)"/)?.[1];
-  const epTitle = x.match(/"episodeTitle":"([^"]+)"/)?.[1];
-  const epId = x.match(/"episode":\{"id":"(\d+)"\}/)?.[1];
-  if (!animeTitle || !epId) return { status: false, code: 404, message: 'not found' };
   const stream = {}, serverRe = /\{"server_id":"arnimecdn([12])"[^}]*?"sources":\[([^\]]*)\]/g;
   for (const s of x.matchAll(serverRe)) {
-    const key = `cdn${s[1]}`, sources = [];
-    for (const src of s[2].matchAll(/\{"quality":"(\d+p)","url":"([^"]+)"\}/g)) sources.push({ quality: src[1], url: src[2] });
-    if (sources.length) stream[key] = sources;
+    const key = `cdn${s[1]}`, urls = [];
+    for (const src of s[2].matchAll(/\{"quality":"(\d+p)","url":"([^"]+)"\}/g)) urls.push(src[2]);
+    if (urls.length) stream[key] = urls;
   }
   if (!Object.keys(stream).length) return { status: false, code: 404, message: 'no stream found' };
-  return { status: true, data: { id: String(sid), epId, title: epTitle ? `${animeTitle} - ${epTitle}` : animeTitle, stream } };
+  return { status: true, data: { id: String(sid), stream } };
 }
