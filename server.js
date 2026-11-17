@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import cors from 'cors'; 
 import { fileURLToPath } from 'url';
 import apiRouter from './api/index.js';
 
@@ -35,6 +36,7 @@ app.use((req, res, next) => {
 // 🌐 ROUTER API
 // ==========================================
 
+app.use(cors()); 
 app.use(apiRouter);
 
 // ==========================================

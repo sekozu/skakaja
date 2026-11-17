@@ -52,6 +52,25 @@ const pageFromHtml = (html) => {
   return match ? parseInt(match[1], 10) : 1;
 };
 
+function parseSynopsis(rscText, $) {
+  let synopsis = [];
+  const pMatch = rscText.match(/"paragraphs":\s*(\[.*?\])\s*(?:,|})/s);
+  
+  if (pMatch) {
+    try { 
+      synopsis = JSON.parse(pMatch[1]); 
+    } catch (e) { 
+      const text = $('p.line-clamp-3').first().text().trim();
+      synopsis = text ? [text] : [];
+    }
+  } else {
+    const text = $('p.line-clamp-3').first().text().trim();
+    synopsis = text ? [text] : [];
+  }
+  
+  return synopsis;
+}
+
 export async function getLatest() {
   const r = await get('/terbaru');
   if (!r.ok) return { status: false, ...r };
@@ -124,22 +143,31 @@ export async function getAnimeDetail(id) {
   const r = await get(`/anime/${tid}`);
   if (!r.ok) return { status: false, ...r };
   const $ = cheerio.load(r.html), title = $('h1').first().text().trim();
-  const epMatch = r.html.match(/"numberOfEpisodes":(\d+)/);
+  
+  const rscText = r.html.split('self.__next_f.push([1,').slice(1).map(c => {
+    const end = c.lastIndexOf('])');
+    try { return JSON.parse(end !== -1 ? c.slice(0, end) : c); } catch { return ''; }
+  }).join('');
+
+  const epMatch = rscText.match(/"numberOfEpisodes":(\d+)/) || r.html.match(/"numberOfEpisodes":(\d+)/);
   if (!title || !epMatch) return { status: false, code: 404, message: 'data not found' };
-  const metaDiv = $('h1').first().next('div'), spans = metaDiv.find('span');
-  const yearRaw = spans.eq(0).text().trim(), year = yearRaw && yearRaw !== 'UNKNOWN' ? yearRaw : null;
-  const type = spans.eq(1).text().trim() || null, status = spans.eq(2).text().trim() || null, rating = spans.eq(3).text().trim() || null;
-  let genre = [];
-  const gMatch = r.html.match(/"genre":\s*\[([^\]]*)\]/);
-  if (gMatch) { try { genre = JSON.parse(`[${gMatch[1]}]`); } catch { genre = []; } }
+
+  const spans = $('h1').first().next('div').find('span');
+  const year = spans.eq(0).text().trim() || null, type = spans.eq(1).text().trim() || null, status = spans.eq(2).text().trim() || null, rating = spans.eq(3).text().trim() || null;
+  
+  const gMatch = rscText.match(/"genre":\s*\[([^\]]*)\]/);
+  const genre = gMatch ? JSON.parse(`[${gMatch[1]}]`) : [];
+
   let alternative = null, jadwal = null;
   $('span').each((_, el) => {
     const label = $(el).text().trim();
     if (label === 'Alternatif:') alternative = $(el).next('span').text().trim() || null;
-    else if (label === 'Jadwal:') jadwal = $(el).next('span').text().trim() || null;
+    if (label === 'Jadwal:') jadwal = $(el).next('span').text().trim() || null;
   });
-  const synopsis = $('p.line-clamp-3, p.line-clamp-4').first().text().trim() || null;
-  return { status: true, data: { id: String(tid), title, alternative, synopsis, year, type, status, rating, jadwal, total_episode: parseInt(epMatch[1], 10), genre } };
+
+  const synopsis = parseSynopsis(rscText, $);
+
+  return { status: true, data: { id: String(tid), title, alternative, synopsis, year, type, status, rating, jadwal, total: parseInt(epMatch[1], 10), genre } };
 }
 
 export async function getVideoPlayer(id, ep = 1) {
@@ -159,4 +187,48 @@ export async function getVideoPlayer(id, ep = 1) {
   }
   if (!Object.keys(stream).length) return { status: false, code: 404, message: 'no stream found' };
   return { status: true, data: { id: String(sid), stream } };
+}
+
+export async function getSchedule() {
+  const r = await get('/#jadwal');
+  if (!r.ok) return { status: false, ...r };
+
+  const rscText = r.html.split('self.__next_f.push([1,').slice(1).map(c => {
+    const end = c.lastIndexOf('])');
+    try { return JSON.parse(end !== -1 ? c.slice(0, end) : c); } catch { return ''; }
+  }).join('');
+
+  const grouped = {
+    Senin: [], Selasa: [], Rabu: [], Kamis: [], Jumat: [], Sabtu: [], Minggu: []
+  };
+  
+  const seen = new Set();
+  const regex = /"animeId":"(\d+)","id":"\d+","title":"([^"]+)","poster":"([^"]+)","backdrop":"[^"]*","rating":"([^"]*)","status":"([^"]*)","type":"([^"]*)","releaseDay":"([^"]*)"/g;
+  let match;
+
+  while ((match = regex.exec(rscText)) !== null) {
+    const id = match[1];
+    const title = match[2];
+    const image = match[3];
+    const rating = match[4];
+    const status = match[5];
+    const type = match[6];
+    const hari = match[7];
+
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    if (grouped[hari]) {
+      grouped[hari].push({
+        id,
+        title,
+        image,
+        rating,
+        status,
+        type
+      });
+    }
+  }
+
+  return { status: true, data: grouped };
 }

@@ -7,8 +7,7 @@ const router = express.Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const cache = new Map();
-const TTL = 5 * 60 * 60 * 1000;
-const CACHE_KEY = '180118';
+const CACHE_KEY = 'ganteng';
 
 const fmt = (ms) => {
   const s = Math.floor(ms / 1000);
@@ -19,16 +18,32 @@ const fmt = (ms) => {
 };
 
 const c = async (key, fn) => {
-  const now = Date.now();
   const hit = cache.get(key);
-  if (hit && now - hit.time < TTL) {
+  if (hit) {
     hit.hits = (hit.hits || 0) + 1;
     return hit.data;
   }
   const data = await fn();
-  cache.set(key, { time: now, data, hits: 0 });
+  cache.set(key, { time: Date.now(), data, hits: 0 });
   return data;
 };
+
+router.get('/api/home', async (req, res) => {
+  const data = await c('home', async () => {
+    const [latest, popular, jadwal] = await Promise.all([
+      arnime.getLatest(),
+      arnime.getPopuler(),
+      arnime.getSchedule()
+    ]);
+    return {
+      latest: latest.data || [],
+      popular: popular.data || [],
+      jadwal: jadwal.data || {}
+    };
+  });
+
+  res.json({ status: true, data });
+});
 
 router.get('/api/latest', async (req, res) => {
   res.json(await c('latest', () => arnime.getLatest()));
@@ -61,20 +76,51 @@ router.get('/api/watch/:id', async (req, res) => {
   res.json(await c(`watch:${req.params.id}:${ep}`, () => arnime.getVideoPlayer(req.params.id, ep)));
 });
 
+router.get('/api/jadwal', async (req, res) => {
+  res.json(await c('jadwal', () => arnime.getSchedule()));
+});
+
 router.get('/cache', (req, res) => {
   const now = Date.now();
   const list = [];
+  let totalBytes = 0;
+  
   for (const [key, v] of cache) {
+    const bytes = JSON.stringify(v.data).length;
+    totalBytes += bytes;
+    
+    let sizeStr;
+    if (bytes < 1024) {
+      sizeStr = `${bytes} B`;
+    } else if (bytes < 1024 * 1024) {
+      sizeStr = `${(bytes / 1024).toFixed(2)} KB`;
+    } else {
+      sizeStr = `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
+
     list.push({
       key,
-      size: JSON.stringify(v.data).length,
-      start: new Date(v.time).toISOString(),
-      ttl: fmt(Math.max(0, TTL - (now - v.time))),
-      maxTtl: fmt(TTL),
+      size: sizeStr,
+      age: fmt(now - v.time) + ' yang lalu',
       hits: v.hits || 0,
     });
   }
-  res.json({ total: list.length, data: list });
+  
+  // Format total size
+  let totalSizeStr;
+  if (totalBytes < 1024) {
+    totalSizeStr = `${totalBytes} B`;
+  } else if (totalBytes < 1024 * 1024) {
+    totalSizeStr = `${(totalBytes / 1024).toFixed(2)} KB`;
+  } else {
+    totalSizeStr = `${(totalBytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+  
+  res.json({ 
+    total: list.length, 
+    total_size: totalSizeStr,
+    data: list 
+  });
 });
 
 router.get('/cache/clear', (req, res) => {
