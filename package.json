@@ -1,5 +1,6 @@
 {
-  "name": "onezynime",
+  "name": "api-sekozu",
+  "description": "Rest Api Anime Private",
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",

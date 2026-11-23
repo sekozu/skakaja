@@ -7,7 +7,7 @@ const router = express.Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const cache = new Map();
-const CACHE_KEY = 'ganteng';
+const CACHE_KEY = 'botak';
 
 const fmt = (ms) => {
   const s = Math.floor(ms / 1000);
@@ -29,20 +29,7 @@ const c = async (key, fn) => {
 };
 
 router.get('/api/home', async (req, res) => {
-  const data = await c('home', async () => {
-    const [latest, popular, jadwal] = await Promise.all([
-      arnime.getLatest(),
-      arnime.getPopuler(),
-      arnime.getSchedule()
-    ]);
-    return {
-      latest: latest.data || [],
-      popular: popular.data || [],
-      jadwal: jadwal.data || {}
-    };
-  });
-
-  res.json({ status: true, data });
+  res.json(await c('home', () => arnime.getHome()));
 });
 
 router.get('/api/latest', async (req, res) => {

@@ -1,5 +1,4 @@
 import axios from 'axios';
-import * as cheerio from 'cheerio';
 
 const BASE_URL = 'https://arnime.my.id';
 const HEADERS = {
@@ -26,25 +25,67 @@ const rsc = (html) => html.split('self.__next_f.push([1,').slice(1).map(c => {
   try { return JSON.parse(end !== -1 ? c.slice(0, end) : c); } catch { return ''; }
 }).join('');
 
-const list = ($) => {
+const list = (rscText) => {
   const out = [], seen = new Set();
-  $('.perf-card').each((_, el) => {
-    const $el = $(el);
-    const link = $el.closest('a').attr('href') || $el.find('a').attr('href');
-    if (!link?.includes('/anime/')) return;
-    const id = link.match(/\/anime\/(\d+)/)?.[1];
-    const title = $el.find('.line-clamp-2').first().text().trim();
-    if (!id || !title || seen.has(id)) return;
+  const regex = /"animeId":"(\d+)".*?"title":"([^"]+)".*?"poster":"([^"]+)".*?"backdrop":"([^"]+)".*?"rating":"([^"]*)".*?"status":"([^"]*)".*?"type":"([^"]*)".*?"releaseDay":"([^"]*)".*?"year":"([^"]*)".*?"url":"([^"]*)".*?"synopsis":\{"paragraphs":\[(.*?)\]\}.*?"genreList":\[(.*?)\].*?"airedStart":"([^"]*)".*?"score":"([^"]*)"/g;
+  let match;
+
+  while ((match = regex.exec(rscText)) !== null) {
+    const id = match[1];
+    if (seen.has(id)) continue;
     seen.add(id);
+
+    const fixImg = (url) => url ? url.replace(/%2F/gi, '/').replace(/=/g, '') : null;
+
     out.push({
-      id, title, url: `/anime/${id}`,
-      image: $el.find('img').first().attr('src'),
-      badge: $el.find('.uppercase.tracking-wider').first().text().trim(),
-      rating: $el.find('.text-amber-400').first().text().replace('★', '').trim() || null,
-      jadwal: $el.find('.truncate').last().text().trim() || null,
+      id,
+      title: match[2],
+      image: fixImg(match[3]),
+      backdrop: fixImg(match[4]),
+      rating: match[5] || null,
+      status: match[6] || null,
+      type: match[7] || null,
+      day: match[8] || null,
+      year: match[9] || null,
+      url: match[10] || null,
+      sinopsis: match[11] ? match[11].split('","').map(s => s.replace(/^"|"$/g, '').replace(/\\r\\n/g, ' ').replace(/\\n/g, ' ').replace(/"/g, "'")) : [],
+      genre: match[12] ? JSON.parse(`[${match[12]}]`).map(g => g.title) : [],
+      airedStart: match[13] || null,
+      score: match[14] || null
     });
-  });
+  }
   return out;
+};
+
+const detail = (x) => {
+  
+  const regex = /"animeId":"(\d+)","title":"([^"]+)","poster":"([^"]+)"[\s\S]*?lucide-calendar[\s\S]*?\}\],"([^"]+)"/g;
+  const resinop = /"paragraphs":\["(.*?)"]/g;
+  const regenre = /"genre":\[(.*?)\]/g;
+  const teps = /"Daftar Episode \(",(\d+),"\)"/g;
+  const stats = /status":"([^"]+)","rating":"([^"]+)","year":"([^"]+)"/g;
+
+  const fixImg = (url) => url ? url.replace(/%2F/gi, '/').replace(/=/g, '') : null;
+  const match = regex.exec(x);
+  if (!match) return null;
+
+  const genres = regenre.exec(x);
+  const syn = resinop.exec(x);
+  const m = teps.exec(x);
+  const t = stats.exec(x);
+  
+  return {
+      id: match[1] || 0,
+      title: match[2] || null,
+      image: fixImg(match[3]) || null,
+      genre: JSON.parse(`[${genres[1]}]`) || null,
+      sinopsis: syn[1].split('","').map(s => s.replace(/^"|"$/g, '').replace(/\\r\\n/g, ' ').replace(/\\n/g, ' ').replace(/\\\"/g,"'")) || null,
+      day: match[4],
+      episode: m[1],
+      status: t[1] || null,
+      score: t[2] || null,
+      year: t[3] || null,
+  };
 };
 
 const pageFromHtml = (html) => {
@@ -52,45 +93,52 @@ const pageFromHtml = (html) => {
   return match ? parseInt(match[1], 10) : 1;
 };
 
-function parseSynopsis(rscText, $) {
-  let synopsis = [];
-  const pMatch = rscText.match(/"paragraphs":\s*(\[.*?\])\s*(?:,|})/s);
-  
-  if (pMatch) {
-    try { 
-      synopsis = JSON.parse(pMatch[1]); 
-    } catch (e) { 
-      const text = $('p.line-clamp-3').first().text().trim();
-      synopsis = text ? [text] : [];
+export async function getHome() {
+  const r = await get('/');
+  if (!r.ok) return { status: false, ...r };
+
+  const text = rsc(r.html).replace(/\\"/g, '"');
+  const posT = text.indexOf('"id":"terbaru"');
+  const posO = text.indexOf('"id":"ongoing"');
+  const posP = text.indexOf('"id":"populer"');
+
+  return {
+    status: true,
+    data: {
+      latest: list(text.slice(text.indexOf('"animeList":[', posT), posO !== -1 ? posO : text.length)),
+      ongoing: list(text.slice(text.indexOf('"animeList":[', posO), posP !== -1 ? posP : text.length)),
+      popular: list(text.slice(text.indexOf('"animeList":[', posP)))
     }
-  } else {
-    const text = $('p.line-clamp-3').first().text().trim();
-    synopsis = text ? [text] : [];
-  }
-  
-  return synopsis;
+  };
 }
 
 export async function getLatest() {
   const r = await get('/terbaru');
   if (!r.ok) return { status: false, ...r };
-  const data = list(cheerio.load(r.html));
+  
+  const data = list(rsc(r.html));
   return { status: true, total: data.length, data };
 }
 
 export async function getPopuler() {
   const r = await get('/populer');
   if (!r.ok) return { status: false, ...r };
-  const data = list(cheerio.load(r.html));
+  
+  const data = list(rsc(r.html));
   return { status: true, total: data.length, data };
 }
 
 export async function getKategori(query = {}) {
-  const p = new URLSearchParams(Object.entries(query).filter(([k, v]) => v && ['type', 'genre', 'status', 'sort', 'page'].includes(k)));
-  const qs = p.toString();
-  const r = await get('/kategori' + (qs ? `?${qs}` : ''));
+  const p = new URLSearchParams(
+    Object.entries(query).filter(([k, v]) =>
+      v && ['type', 'genre', 'status', 'sort', 'page'].includes(k)
+    )
+  );
+
+  const r = await get('/kategori' + (p.size ? `?${p}` : ''));
   if (!r.ok) return { status: false, ...r };
-  const $ = cheerio.load(r.html), data = list($);
+
+  const data = list(rsc(r.html));
   return { status: true, page: pageFromHtml(r.html), total: data.length, data };
 }
 
@@ -98,137 +146,181 @@ export async function getFilter() {
   const r = await get('/kategori');
   if (!r.ok) return { status: false, ...r };
 
-  const $ = cheerio.load(r.html);
-  const f = { type: [], genre: [], status: [], sort: [] };
-  const map = { tipe: 'type', genre: 'genre', status: 'status', urutkan: 'sort' };
+  const x = rsc(r.html);
+  const f = {
+    type: [],
+    genre: [],
+    status: [],
+    sort: []
+  };
 
-  $('div.flex.items-start.gap-2').each((_, el) => {
-    const $el = $(el);
-    const key = map[$el.find('span').first().text().trim().toLowerCase()];
-    if (!key) return;
+  const rows = {
+    type: 'Tipe',
+    genre: 'Genre',
+    status: 'Status',
+    sort: 'Urutkan'
+  };
 
-    $el.find('a').each((_, a) => {
-      const label = $(a).text().trim();
-      if (!label || label === 'Semua') return;
+  for (const [key, title] of Object.entries(rows)) {
+    const start = x.indexOf(`"children":"${title}"`);
+    if (start === -1) continue;
 
-      // ambil nilai query dari href
-      const href = $(a).attr('href') || '';
-      const val = href.match(new RegExp(`[?&]${key}=([^&]+)`))?.[1];
-      if (val) f[key].push({ label, value: decodeURIComponent(val) });
-    });
-  });
+    const next = Object.values(rows)
+      .map(v => x.indexOf(`"children":"${v}"`, start + 1))
+      .filter(i => i !== -1);
 
-  return { status: true, data: f };
+    const end = next.length ? Math.min(...next) : x.length;
+    const section = x.slice(start, end);
+
+    const refs = [...section.matchAll(/"\$L([a-z0-9]+)"/g)]
+      .map(m => m[1]);
+
+    const source = section + refs
+      .map(id => x.match(new RegExp(`(?:^|\\n)${id}:([^\\n]+)`))?.[1] || '')
+      .join('\n');
+
+    for (const m of source.matchAll(
+      /"href":"([^"]+)"[\s\S]*?"children":"([^"]+)"/g
+    )) {
+      const href = m[1].replace(/\\u0026/g, '&');
+      const label = m[2];
+
+      if (label === 'Semua') continue;
+
+      const value = href.match(
+        new RegExp(`[?&]${key}=([^&"]+)`)
+      )?.[1];
+
+      if (value && !f[key].some(item => item.value === decodeURIComponent(value))) {
+        f[key].push({
+          label,
+          value: decodeURIComponent(value).toLowerCase()
+        });
+      }
+    }
+  }
+
+  return {
+    status: true,
+    data: f
+  };
 }
 
 export async function getSearch(q = '', page, filter = {}) {
   if (!q || !q.trim()) return { status: false, code: 400, message: 'query "q" wajib diisi' };
+  
   filter = filter || {};
   const p = new URLSearchParams({ q: q.trim() });
+  
   for (const key of ['genre', 'status', 'type', 'sort']) {
-    const v = filter[key];
-    if (v) p.set(key, String(v));
+    if (filter[key]) p.set(key, String(filter[key]));
   }
   if (Number.isFinite(+page) && +page > 0) p.set('page', Math.floor(+page));
-  const qs = p.toString();
-  const r = await get('/search?' + qs);
+  
+  const r = await get('/anime?' + p.toString());
   if (!r.ok) return { status: false, ...r };
-  const $ = cheerio.load(r.html), data = list($);
-  return { status: true, query: q.trim(), page: pageFromHtml(r.html), total: data.length, data };
+
+  const text = rsc(r.html).replace(/\\"/g, '"');
+  
+  const isKosong = text.includes('Tidak ada anime yang cocok') || text.includes('0 judul ditampilkan');
+
+  const rawData = list(text);
+  
+  return { 
+    status: true, 
+    query: q.trim(), 
+    page: pageFromHtml(r.html), 
+    total: isKosong ? 0 : rawData.length, 
+    data: isKosong ? [] : rawData,
+    ...(isKosong && { recommend: rawData })
+  };
+  
 }
 
 export async function getAnimeDetail(id) {
   const tid = parseInt(id, 10);
-  if (!Number.isFinite(tid) || tid < 1) return { status: false, code: 400, message: 'invalid id' };
+  if (!Number.isFinite(tid) || tid < 1) {
+    return { status: false, code: 400, message: 'invalid id' };
+  }
+
   const r = await get(`/anime/${tid}`);
   if (!r.ok) return { status: false, ...r };
-  const $ = cheerio.load(r.html), title = $('h1').first().text().trim();
+
+  const text = rsc(r.html);
+  const main = detail(text);
+
+  if (!main) return { status: false, code: 404, message: 'Anime Tidak Ditemukan' };
   
-  const rscText = r.html.split('self.__next_f.push([1,').slice(1).map(c => {
-    const end = c.lastIndexOf('])');
-    try { return JSON.parse(end !== -1 ? c.slice(0, end) : c); } catch { return ''; }
-  }).join('');
-
-  const epMatch = rscText.match(/"numberOfEpisodes":(\d+)/) || r.html.match(/"numberOfEpisodes":(\d+)/);
-  if (!title || !epMatch) return { status: false, code: 404, message: 'data not found' };
-
-  const spans = $('h1').first().next('div').find('span');
-  const year = spans.eq(0).text().trim() || null, type = spans.eq(1).text().trim() || null, status = spans.eq(2).text().trim() || null, rating = spans.eq(3).text().trim() || null;
   
-  const gMatch = rscText.match(/"genre":\s*\[([^\]]*)\]/);
-  const genre = gMatch ? JSON.parse(`[${gMatch[1]}]`) : [];
-
-  let alternative = null, jadwal = null;
-  $('span').each((_, el) => {
-    const label = $(el).text().trim();
-    if (label === 'Alternatif:') alternative = $(el).next('span').text().trim() || null;
-    if (label === 'Jadwal:') jadwal = $(el).next('span').text().trim() || null;
-  });
-
-  const synopsis = parseSynopsis(rscText, $);
-
-  return { status: true, data: { id: String(tid), title, alternative, synopsis, year, type, status, rating, jadwal, total: parseInt(epMatch[1], 10), genre } };
+  const posRelated = text.indexOf('"id":"related-anime"');
+  const related = posRelated !== -1
+    ? list(text.slice(text.lastIndexOf('"animeList":[', posRelated)))
+    : [];
+  return {
+    status: true,
+    data: {
+      ...main,
+      related
+    }
+  };
 }
 
-export async function getVideoPlayer(id, ep = 1) {
-  const sid = parseInt(id, 10);
-  if (!Number.isFinite(sid) || sid < 1) return { status: false, code: 400, message: 'invalid id' };
-  const epString = String(ep).trim();
-  if (!/^\d+$/.test(epString) || parseInt(epString, 10) < 1) return { status: false, code: 400, message: 'invalid episode' };
-  const epNumToFetch = parseInt(epString, 10);
-  const r = await get(`/watch/${sid}?ep=${epNumToFetch}`);
+export async function getVideoPlayer(id, ep) {
+  if (!/^\d+$/.test(String(id)) || +id < 1 || !/^\d+$/.test(String(ep)) || +ep < 1)
+    return { status: false, code: 400, message: 'invalid id or episode' };
+
+  const r = await get(`/watch/${id}?ep=${ep}`);
   if (!r.ok) return { status: false, ...r };
+
   const x = rsc(r.html);
-  const stream = {}, serverRe = /\{"server_id":"arnimecdn([12])"[^}]*?"sources":\[([^\]]*)\]/g;
-  for (const s of x.matchAll(serverRe)) {
-    const key = `cdn${s[1]}`, urls = [];
-    for (const src of s[2].matchAll(/\{"quality":"(\d+p)","url":"([^"]+)"\}/g)) urls.push(src[2]);
-    if (urls.length) stream[key] = urls;
+  const episode = x.match(/"episode":\{"id":"(\d+)","title":"([^"]+)"\}/);
+  if (!episode) return { status: false, code: 404, message: 'episode not found' };
+
+  const servers = {};
+  for (const m of x.matchAll(/"server_id":"arnimecdn([12])".*?"sources":\[(.*?)\]/g)) {
+    const sources = [...m[2].matchAll(/"quality":"(\d+p)","url":"([^"]+)"/g)]
+      .map(s => ({ quality: s[1], url: s[2] }));
+    if (sources.length) servers[`cdn${m[1]}`] = sources;
   }
-  if (!Object.keys(stream).length) return { status: false, code: 404, message: 'no stream found' };
-  return { status: true, data: { id: String(sid), stream } };
+
+  if (!Object.keys(servers).length)
+    return { status: false, code: 404, message: 'no stream found' };
+
+  const getValue = k =>
+  x.match(new RegExp(`"${k}":"([^"]*)"`))?.[1] || null;
+  
+  return {
+    status: true,
+    data: {
+      id: String(id),
+      animeTitle: getValue('animeTitle'),
+      episode: { id: episode[1], title: episode[2] },
+      nextEpisodeId: getValue('nextEpisodeId'),
+      nextEpisodeUrl: getValue('nextEpisodeUrl'),
+      nextEpisodeTitle: getValue('nextEpisodeTitle'),
+      servers
+    }
+  };
 }
 
 export async function getSchedule() {
   const r = await get('/#jadwal');
   if (!r.ok) return { status: false, ...r };
 
-  const rscText = r.html.split('self.__next_f.push([1,').slice(1).map(c => {
-    const end = c.lastIndexOf('])');
-    try { return JSON.parse(end !== -1 ? c.slice(0, end) : c); } catch { return ''; }
-  }).join('');
-
-  const grouped = {
-    Senin: [], Selasa: [], Rabu: [], Kamis: [], Jumat: [], Sabtu: [], Minggu: []
-  };
-  
-  const seen = new Set();
-  const regex = /"animeId":"(\d+)","id":"\d+","title":"([^"]+)","poster":"([^"]+)","backdrop":"[^"]*","rating":"([^"]*)","status":"([^"]*)","type":"([^"]*)","releaseDay":"([^"]*)"/g;
+  const rscText = rsc(r.html);
+  const data = list(rscText);
+  const hariMap = {};
+  const regexHari = /"animeId":"(\d+)".*?"releaseDay":"([^"]*)"/g;
   let match;
 
-  while ((match = regex.exec(rscText)) !== null) {
-    const id = match[1];
-    const title = match[2];
-    const image = match[3];
-    const rating = match[4];
-    const status = match[5];
-    const type = match[6];
-    const hari = match[7];
+  while ((match = regexHari.exec(rscText)) !== null) hariMap[match[1]] = match[2];
 
-    if (seen.has(id)) continue;
-    seen.add(id);
+  const grouped = { Senin: [], Selasa: [], Rabu: [], Kamis: [], Jumat: [], Sabtu: [], Minggu: [] };
 
-    if (grouped[hari]) {
-      grouped[hari].push({
-        id,
-        title,
-        image,
-        rating,
-        status,
-        type
-      });
-    }
-  }
+  data.forEach(item => {
+    const hari = hariMap[item.id];
+    if (hari && grouped[hari]) grouped[hari].push({ ...item, releaseDay: hari });
+  });
 
   return { status: true, data: grouped };
 }
